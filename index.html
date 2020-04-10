@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>俄羅斯方塊</title>
+    <meta charset="UTF-8" />
+    <meta name="description" content="" />
+    <meta name="keywords" content="" />
+    <link href="https://fonts.googleapis.com/css?family=Noto+Sans+TC&display=swap" rel="stylesheet" />
+    <style>
+      body {
+        margin: 0;
+      }
+      #canvas {
+        border: 1px solid #ddd;
+      }
+    </style>
+  </head>
+
+  <body>
+    <canvas id="canvas" width="600px" height="800px"></canvas>
+  </body>
+
+  <script>
+    (function() {
+      var canvas, ctx, cWidth, cHeight;
+      canvas = document.getElementById("canvas");
+      ctx = canvas.getContext("2d");
+      cWidth = canvas.width;
+      cHeight = canvas.height;
+
+      var row = 10;
+      var col = 20;
+      var boxWidth = 40;
+      var squareTypeRange = [0, 2, 4, 8, 12, 14, 15]; //["S", "Z", "L", "J", "I", "O", "T"]
+      var squareList = [
+        { w: 2, d: "101101" },
+        { w: 3, d: "011110" },
+        { w: 3, d: "110011" },
+        { w: 2, d: "011110" },
+        { w: 2, d: "101011" },
+        { w: 3, d: "111100" },
+        { w: 2, d: "110101" },
+        { w: 3, d: "001111" },
+        { w: 2, d: "010111" },
+        { w: 3, d: "100111" },
+        { w: 2, d: "111010" },
+        { w: 3, d: "111001" },
+        { w: 1, d: "1111" },
+        { w: 4, d: "1111" },
+        { w: 2, d: "1111" },
+        { w: 3, d: "111010" },
+        { w: 2, d: "011101" },
+        { w: 3, d: "010111" },
+        { w: 2, d: "101110" }
+      ];
+      var squareColorList = [
+        "#ff0000",
+        "#00ff00",
+        "#0000ff",
+        "#ffff00",
+        "#00ffff",
+        "#ff00ff",
+        "#ff7f00" /*, "#7f00ff"*/
+      ];
+      var g = 0.98;
+      var debrisList = [];
+
+      var state = "ready";
+      var runState = "control";
+      var oldTime = Date.now();
+      var pos = [0, -4];
+      var squareIndex = 0;
+      var squareColorIndex = 0;
+      var moveCount = 0;
+      var animationCount = 0;
+      var speed = 1;
+      var stableList = [];
+      var stableAddsquareList = [];
+      var eliminateList = [];
+      var score = 0;
+
+      var nextSquareIndex = 0;
+      var nextSquareColorIndex = 0;
+
+      function setShadow(offsetX, offsetY, blur, color) {
+        ctx.shadowColor = color;
+        ctx.shadowBlur = blur;
+        ctx.shadowOffsetX = offsetX;
+        ctx.shadowOffsetY = offsetY;
+      }
+      function clearShadow() {
+        setShadow(0, 0, 0, "rgba(0, 0, 0, 0)");
+      }
+
+      function addDebris(x, y, vX, vY, life, color, width, height) {
+        debrisList.push({
+          x: x,
+          y: y,
+          vX: vX,
+          vY: vY,
+          aX: 0,
+          aY: 0,
+          time: 0,
+          life: life,
+          color: color,
+          width: width,
+          height: height
+        });
+      }
+      function drawBG() {
+        for (var j = 0; j < col; j++) {
+          for (var i = 0; i < row; i++) {
+            drawBox(i, j, "#333333", "#444444");
+          }
+        }
+      }
+      function drawBox(x, y, fill, stroke) {
+        ctx.fillStyle = fill;
+        ctx.fillRect(x * boxWidth, y * boxWidth, boxWidth, boxWidth);
+        ctx.strokeStyle = stroke;
+        ctx.strokeRect(x * boxWidth, y * boxWidth, boxWidth, boxWidth);
+      }
+      function squareToStable(pos, squareC, stableList, squareColorIndex) {
+        squareC.d.split("").forEach(function(el, index) {
+          if (el === "1") {
+            var x = pos[0] + (index % squareC.w);
+            var y = pos[1] + parseInt(index / squareC.w);
+            if (y >= 0) {
+              stableList[y * row + x] = squareColorIndex;
+            }
+          }
+        });
+      }
+      function checkSquare(pos, squareC, fun) {
+        return squareC.d.split("").some(function(el, index) {
+          if (el === "1") {
+            var x = pos[0] + (index % squareC.w);
+            var y = pos[1] + parseInt(index / squareC.w);
+            return fun(x, y);
+          }
+        });
+      }
+      function checkOverlapStable(pos, squareC, stableList) {
+        return checkSquare(pos, squareC, function(x, y) {
+          return y >= 0 && stableList[y * row + x] !== -1;
+        });
+      }
+      function checkFloor(pos, squareC) {
+        var h = squareC.d.length / squareC.w;
+        return pos[1] + h > col;
+      }
+      function getSquareType(squareIndex) {
+        var typeIndex = squareTypeRange.findIndex(function(el) {
+          return squareIndex < el;
+        });
+        if (typeIndex === -1) {
+          typeIndex = squareTypeRange.length;
+        }
+        return typeIndex - 1;
+      }
+      function turnSquare(squareIndex) {
+        var typeIndex = getSquareType(squareIndex);
+        var start = squareTypeRange[typeIndex];
+        var len = (typeIndex + 1 < squareTypeRange.length ? squareTypeRange[typeIndex + 1] : squareList.length) - start;
+        return start + ((squareIndex + 1 - start) % len);
+      }
+
+      function drawSquareBox(x, y, width, height, fill) {
+        ctx.fillStyle = fill;
+        ctx.fillRect(x, y, width, height);
+
+        var gradient = ctx.createLinearGradient(x, y, x + width, y + height);
+        gradient.addColorStop(0, "rgba(255,255,255,0.75)");
+        gradient.addColorStop(0.5, "rgba(255,255,255,0.6)");
+        gradient.addColorStop(0.5, "rgba(0,0,0,0.5)");
+        gradient.addColorStop(1, "rgba(0,0,0,0.35)");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x, y, width, height);
+
+        var gradient = ctx.createLinearGradient(x + width, y, x, y + height);
+        gradient.addColorStop(0, "rgba(255,255,255,0.25)");
+        gradient.addColorStop(0.5, "rgba(255,255,255,0.5)");
+        gradient.addColorStop(0.5, "rgba(0,0,0,0.5)");
+        gradient.addColorStop(1, "rgba(0,0,0,0.25)");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x, y, width, height);
+
+        ctx.strokeStyle = "rgba(0,0,0,0.5)";
+        ctx.strokeRect(x, y, width, height);
+      }
+      function drawSquareShadow(pos, squareC, color) {
+        setShadow(2, 3, 5, color);
+        ctx.fillStyle = color;
+        squareC.d.split("").forEach(function(el, index) {
+          if (el === "1") {
+            var x = pos[0] + (index % squareC.w);
+            var y = pos[1] + parseInt(index / squareC.w);
+            ctx.fillRect(x * boxWidth, y * boxWidth, boxWidth, boxWidth);
+          }
+        });
+        clearShadow();
+      }
+
+      function drawSquare(pos, squareC, color) {
+        squareC.d.split("").forEach(function(el, index) {
+          if (el === "1") {
+            var x = pos[0] + (index % squareC.w);
+            var y = pos[1] + parseInt(index / squareC.w);
+            //drawBox(x, y, color, "#cccccc");
+            drawSquareBox(x * boxWidth, y * boxWidth, boxWidth, boxWidth, color);
+          }
+        });
+      }
+      function drawSquareEffects(pos, squareC) {
+        ctx.globalCompositeOperation = "lighter";
+        setShadow(0, 0, 10, "rgba(255,255,255,0.75)");
+        squareC.d.split("").forEach(function(el, index) {
+          if (el === "1") {
+            var x = pos[0] + (index % squareC.w);
+            var y = pos[1] + parseInt(index / squareC.w);
+            ctx.fillStyle = "rgba(255,255,255,0.75)";
+            ctx.beginPath();
+            ctx.moveTo(x * boxWidth, y * boxWidth);
+            ctx.lineTo(x * boxWidth + boxWidth, y * boxWidth);
+            ctx.lineTo(x * boxWidth + boxWidth * 0.5, y * boxWidth + boxWidth * 0.5);
+            ctx.closePath();
+            ctx.fill();
+          }
+        });
+        clearShadow();
+        ctx.globalCompositeOperation = "source-over";
+      }
+
+      function drawSquareStroke(pos, squareC) {
+        squareC.d.split("").forEach(function(el, index) {
+          if (el === "1") {
+            var x = pos[0] + (index % squareC.w);
+            var y = pos[1] + parseInt(index / squareC.w);
+            ctx.fillStyle = "rgba(255,255,255,0.05)";
+            ctx.fillRect(x * boxWidth, y * boxWidth, boxWidth, boxWidth);
+            ctx.strokeStyle = "rgba(255,255,255,0.5)";
+            ctx.strokeRect(x * boxWidth, y * boxWidth, boxWidth, boxWidth);
+          }
+        });
+      }
+
+      function drawStable(stableList, color, start, end) {
+        start = start || 0;
+        end = end || col;
+        for (var j = start; j < end; j++) {
+          for (var i = 0; i < row; i++) {
+            if (stableList[j * row + i] !== -1) {
+              var stableColor = color || squareColorList[stableList[j * row + i]];
+              //drawBox(i, j, color, "#666666");
+              drawSquareBox(i * boxWidth, j * boxWidth, boxWidth, boxWidth, stableColor);
+            }
+          }
+        }
+      }
+
+      function drawStableShadow(stableList, color, start, end) {
+        setShadow(2, 3, 5, color);
+        start = start || 0;
+        end = end || col;
+        ctx.fillStyle = color;
+        for (var j = start; j < end; j++) {
+          for (var i = 0; i < row; i++) {
+            if (stableList[j * row + i] !== -1) {
+              ctx.fillRect(i * boxWidth, j * boxWidth, boxWidth, boxWidth);
+            }
+          }
+        }
+        clearShadow();
+      }
+
+      function drawStableEffects(stableList, start, end) {
+        start = start || 0;
+        end = end || col;
+        ctx.globalCompositeOperation = "lighter";
+        setShadow(0, 0, 10, "rgba(255,255,255,0.75)");
+        for (var j = start; j < end; j++) {
+          for (var i = 0; i < row; i++) {
+            if (stableList[j * row + i] !== -1) {
+              ctx.fillStyle = "rgba(255,255,255,0.75)";
+              ctx.beginPath();
+              ctx.moveTo(i * boxWidth, j * boxWidth);
+              ctx.lineTo(i * boxWidth + boxWidth, j * boxWidth);
+              ctx.lineTo(i * boxWidth + boxWidth * 0.5, j * boxWidth + boxWidth * 0.5);
+              ctx.closePath();
+              ctx.fill();
+            }
+          }
+        }
+        clearShadow();
+        ctx.globalCompositeOperation = "source-over";
+      }
+      function checkEliminate() {
+        var completeList = [];
+        for (var j = 0; j < col; j++) {
+          var bool = true;
+          for (var i = 0; i < row; i++) {
+            if (stableList[j * row + i] === -1) {
+              bool = false;
+              break;
+            }
+          }
+          if (bool) {
+            completeList.push(j);
+          }
+        }
+        return completeList;
+      }
+
+      function getRandomSquarePos(squareC) {
+        return [Math.floor(row * 0.5 - squareC.w * 0.5), -squareC.d.length / squareC.w];
+      }
+
+      function getToFloorStep(squareC) {
+        var squareC = squareList[squareIndex];
+        var h = squareC.d.length / squareC.w;
+        var d = [];
+        var step = Infinity;
+        for (var i = 0; i < squareC.w; i++) {
+          var top = h - 1;
+          for (var j = h - 1; j >= 0; j--) {
+            if (squareC.d.charAt(squareC.w * j + i) === "1") {
+              top = j + pos[1];
+              break;
+            }
+          }
+          var bottom = col;
+          for (var j = Math.max(top, 0); j < col; j++) {
+            if (stableList[j * row + pos[0] + i] !== -1) {
+              bottom = j;
+              break;
+            }
+          }
+          var d = bottom - top - 1;
+          if (d < step) {
+            step = d;
+          }
+        }
+        return step;
+      }
+      function getRandomSquareIndex() {
+        var typeIndex = Math.floor(Math.random() * squareTypeRange.length);
+        var start = squareTypeRange[typeIndex];
+        var len = (typeIndex + 1 < squareTypeRange.length ? squareTypeRange[typeIndex + 1] : squareList.length) - start;
+        return start + Math.floor(Math.random() * len);
+      }
+      function randomSquare() {
+        squareIndex = nextSquareIndex;
+        squareColorIndex = nextSquareColorIndex;
+        nextSquareIndex = getRandomSquareIndex();
+        nextSquareColorIndex = getSquareType(nextSquareIndex);
+        pos = getRandomSquarePos(squareList[squareIndex]);
+      }
+
+      function addDebrisToSquare(indexX, indexY, x, y, color) {
+        for (var j = 0; j < indexX; j++) {
+          for (var i = 0; i < indexY; i++) {
+            addDebris(
+              x + ((i + 0.5) * boxWidth) / indexX,
+              y + ((j + 0.5) * boxWidth) / indexY,
+              20 * Math.random() - 10,
+              20 * Math.random() - 10,
+              1 + 0.5 * Math.random() - 0.25,
+              color,
+              boxWidth / indexX,
+              boxWidth / indexY
+            );
+          }
+        }
+      }
+      function setSquareComplete(pos, squareC, stableList, squareColorIndex) {
+        squareToStable(pos, squareC, stableList, squareColorIndex);
+        eliminateList = checkEliminate();
+        randomSquare();
+        if (eliminateList.length > 0) {
+          runState = "Animation";
+        } else {
+          var bool = false;
+          for (var i = 0; i < row; i++) {
+            if (stableList[0 * row + i] !== -1) {
+              bool = true;
+              break;
+            }
+          }
+          if (bool) {
+            state = "lose";
+          }
+        }
+      }
+      function drawText(s, font, x, y) {
+        ctx.font = font;
+        //var ssInfo = ctx.measureText(ss);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(s, x, y);
+      }
+
+      init();
+
+      function init() {
+        debrisList = [];
+        squareIndex = 0;
+        squareColorIndex = 0;
+        nextSquareIndex = getRandomSquareIndex();
+        nextSquareColorIndex = getSquareType(nextSquareIndex);
+        moveCount = 0;
+        animationCount = 0;
+        speed = 1;
+        stableList = [];
+        eliminateList = [];
+        for (var i = 0; i < row * col; i++) {
+          stableList.push(-1);
+        }
+        stableAddsquareList = stableList.slice();
+        randomSquare();
+        score = 0;
+      }
+
+      var animate = function() {
+        requestAnimationFrame(animate);
+        var nowTime = Date.now();
+        var delta = (nowTime - oldTime) / 1000;
+        oldTime = nowTime;
+        if (state === "run") {
+          if (runState === "control") {
+            moveCount += speed * delta;
+            if (Math.floor(moveCount)) {
+              moveCount %= 1;
+              var squareC = squareList[squareIndex];
+              var step = getToFloorStep(squareC);
+              if (step === 0) {
+                setSquareComplete(pos, squareC, stableList, squareColorIndex);
+              } else {
+                pos[1]++;
+              }
+              stableAddsquareList = stableList.slice();
+              squareToStable(pos, squareList[squareIndex], stableAddsquareList, squareColorIndex);
+            }
+          } else if (runState === "Animation") {
+            animationCount += delta / 0.2;
+            if (Math.floor(animationCount)) {
+              animationCount = 0;
+              var len = eliminateList.length;
+              switch (len) {
+                case 1:
+                  score += 100;
+                  break;
+                case 2:
+                  score += 300;
+                  break;
+                case 3:
+                  score += 500;
+                  break;
+                case 4:
+                  score += 1000;
+                  break;
+              }
+              eliminateList.forEach(function(el, index) {
+                for (var k = 0; k < row; k++) {
+                  var x = k;
+                  var y = el;
+                  addDebrisToSquare(4, 4, x * boxWidth, y * boxWidth, "#ffffff");
+                }
+              });
+              eliminateList.forEach(function(el, index) {
+                stableList.splice(el * row, row);
+                var temp = [];
+                for (var j = 0; j < row; j++) {
+                  temp.push(-1);
+                }
+                stableList = temp.concat(stableList);
+              });
+              runState = "control";
+              stableAddsquareList = stableList.slice();
+              squareToStable(pos, squareList[squareIndex], stableAddsquareList, squareColorIndex);
+            }
+          }
+          for (var i = 0; i < debrisList.length; i++) {
+            var el = debrisList[i];
+            el.time += delta;
+            el.vX += el.aX;
+            el.vY += el.aY + g;
+            el.x += el.vX;
+            el.y += el.vY;
+            if (Math.floor(el.time / el.life)) {
+              debrisList.splice(i, 1);
+              i--;
+            }
+          }
+        } else if (state === "lose") {
+          animationCount += delta / 1;
+          if (Math.floor(animationCount)) {
+            animationCount = 1;
+          }
+        }
+
+        ctx.clearRect(0, 0, cWidth, cHeight);
+        ctx.fillStyle = "#222222";
+        ctx.fillRect(0, 0, cWidth, cHeight);
+        drawBG();
+
+        ctx.save();
+        ctx.translate(0, 50);
+        ctx.fillStyle = "#ffffff";
+        drawText("分 數", "18px Noto Sans TC", 500, 15);
+        ctx.fillStyle = "#333333";
+        ctx.fillRect(410, 50 - 20, 180, 40);
+        ctx.fillStyle = "#ffffff";
+        drawText(score, "18px Noto Sans TC", 500, 50);
+        ctx.restore();
+
+        ctx.save();
+        ctx.translate(0, 180);
+        ctx.fillStyle = "#ffffff";
+        drawText("下 一 個", "18px Noto Sans TC", 500, 15);
+        ctx.fillStyle = "#333333";
+        ctx.fillRect(410, 50 - 20, 180, 180);
+        if (state === "run") {
+          ctx.save();
+          var s = squareList[nextSquareIndex];
+          var w = s.w;
+          var h = s.d.length / w;
+          ctx.translate(410 + 180 * 0.5 - w * boxWidth * 0.5, 50 - 20 + 180 * 0.5 - h * boxWidth * 0.5);
+          drawSquareShadow([0, 0], s, "rgba(0,0,0,0.5)");
+          drawSquare([0, 0], s, squareColorList[nextSquareColorIndex]);
+          drawSquareEffects([0, 0], s);
+          ctx.restore();
+        }
+
+        ctx.restore();
+
+        if (state === "run") {
+          drawStableShadow(stableAddsquareList, "rgba(0,0,0,0.5)");
+          if (runState === "control") {
+            var step = getToFloorStep(squareList[squareIndex]);
+            drawSquareStroke([pos[0], pos[1] + step], squareList[squareIndex]);
+          }
+          drawStable(stableAddsquareList);
+          drawStableEffects(stableAddsquareList);
+          if (runState === "Animation") {
+            ctx.globalCompositeOperation = "lighter";
+            eliminateList.forEach(function(el, index) {
+              var wave = Math.abs(Math.sin(2.5 * animationCount * Math.PI));
+              var rate = 1; //Math.sin(animationCount * Math.PI);
+              setShadow(0, 0, 10, "rgba(255,255,255," + animationCount * wave * rate + ")");
+              ctx.fillStyle = "rgba(255,255,255," + animationCount * wave * rate + ")";
+              ctx.fillRect(0, el * boxWidth, boxWidth * row, boxWidth);
+            });
+            clearShadow();
+            ctx.globalCompositeOperation = "source-over";
+          }
+
+          //ctx.globalCompositeOperation = "lighter";
+          debrisList.forEach(function(el, index) {
+            setShadow(0, 0, 10, squareColorList[el.color]);
+            ctx.fillStyle = el.color;
+            var rate = 1 - el.time / el.life;
+            var w = el.width * rate;
+            var h = el.height * rate;
+            ctx.fillRect(el.x - w * 0.5, el.y - h * 0.5, w, h);
+          });
+          clearShadow();
+          //ctx.globalCompositeOperation = "source-over";
+        } else if (state === "lose") {
+          var temp = Math.ceil(animationCount * col);
+          drawStableShadow(stableList, "rgba(0,0,0,0.5)");
+          drawStable(stableList, "#666666", 0, temp);
+          drawStable(stableList, undefined, temp, col);
+          drawStableEffects(stableList, temp, col);
+        }
+
+        if (state === "ready") {
+          ctx.fillStyle = "rgba(0,0,0,0.5)";
+          ctx.fillRect(0, 0, cWidth, cHeight);
+          ctx.fillStyle = "#ffffff";
+          ctx.save();
+          ctx.translate(0, -40);
+          drawText("俄 羅 斯 方 塊", "30px Noto Sans TC", cWidth * 0.5, cHeight * 0.5);
+          drawText("【 按 任 意 鍵 開 始 遊 戲 】", "15px Noto Sans TC", cWidth * 0.5, cHeight * 0.5 + 40);
+          drawText("↑：方塊旋轉", "14px Noto Sans TC", cWidth * 0.5, cHeight * 0.5 + 60 + 18);
+          drawText("←：方塊左移", "14px Noto Sans TC", cWidth * 0.5, cHeight * 0.5 + 60 + 18 * 2);
+          drawText("→：方塊右移", "14px Noto Sans TC", cWidth * 0.5, cHeight * 0.5 + 60 + 18 * 3);
+          drawText("↓：方塊墜落", "14px Noto Sans TC", cWidth * 0.5, cHeight * 0.5 + 60 + 18 * 4);
+          ctx.restore();
+        } else if (state === "lose") {
+          ctx.fillStyle = "rgba(0,0,0,0.5)";
+          ctx.fillRect(0, 0, cWidth, cHeight);
+          ctx.fillStyle = "#ffffff";
+          drawText("遊 戲 結 束", "30px Noto Sans TC", cWidth * 0.5, cHeight * 0.5);
+          drawText("【 按 任 意 鍵 重 玩 】", "15px Noto Sans TC", cWidth * 0.5, cHeight * 0.5 + 40);
+        }
+      };
+      animate();
+
+      var keyEvent = function() {
+        var keyList = {};
+        this.add = function(type, name, fun) {
+          type = type.toLocaleLowerCase();
+          name = name.toLocaleLowerCase();
+          if (!keyList.hasOwnProperty(name)) {
+            keyList[name] = { active: false, once: false, event: {} };
+          }
+          if (!keyList[name].event.hasOwnProperty(type)) {
+            keyList[name].event[type] = [];
+          }
+          keyList[name].event[type].push(fun);
+        };
+        this.addKeydown = function(name, fun) {
+          this.add("keydown", name, fun);
+        };
+        this.addKeyup = function(name, fun) {
+          this.add("keyup", name, fun);
+        };
+        this.addOnce = function(name, fun) {
+          this.add("once", name, fun);
+        };
+
+        window.addEventListener("keydown", function(e) {
+          var key = e.key.toLocaleLowerCase();
+          keydown(key);
+          keydown("any");
+          function keydown(keyName) {
+            var myKey = keyList[keyName];
+            if (myKey) {
+              myKey.active = true;
+              if (myKey.event["keydown"]) {
+                myKey.event["keydown"].forEach(function(el) {
+                  el(e);
+                });
+              }
+              if (!myKey.once && myKey.event["once"]) {
+                myKey.once = true;
+                myKey.event["once"].forEach(function(el) {
+                  el(e);
+                });
+              }
+            }
+          }
+        });
+
+        window.addEventListener("keyup", function(e) {
+          var key = e.key.toLocaleLowerCase();
+          keyup(key);
+          keyup("any");
+          function keyup(keyName) {
+            var myKey = keyList[keyName];
+            if (myKey) {
+              myKey.active = false;
+              if (myKey.event["keyup"]) {
+                myKey.event["keyup"].forEach(function(el) {
+                  el(e);
+                });
+              }
+              if (myKey.once && myKey.event["once"]) {
+                myKey.once = false;
+              }
+            }
+          }
+        });
+      };
+      var keyEvent01 = new keyEvent();
+
+      function anyFun(e) {
+        if (state === "ready") {
+          state = "run";
+        } else if (state === "lose") {
+          state = "ready";
+          init();
+        }
+      }
+      function arrowupFun(e) {
+        if (state === "run") {
+          if (runState === "control") {
+            var pos0 = pos.slice();
+            var squareIndex0 = turnSquare(squareIndex);
+            var squareC = squareList[squareIndex0];
+            var mm = row - pos0[0] - squareC.w;
+            if (mm < 0) {
+              pos0[0] += mm;
+            }
+            if (!checkFloor(pos0, squareC) && !checkOverlapStable(pos0, squareC, stableList)) {
+              squareIndex = squareIndex0;
+              pos = pos0;
+              stableAddsquareList = stableList.slice();
+              squareToStable(pos, squareList[squareIndex], stableAddsquareList, squareColorIndex);
+            }
+          }
+        }
+      }
+      function arrowleftFun(e) {
+        if (state === "run") {
+          if (runState === "control") {
+            var pos0 = pos.slice();
+            var squareC = squareList[squareIndex];
+            pos0[0] - 1 >= 0 && pos0[0]--;
+            if (!checkFloor(pos0, squareC) && !checkOverlapStable(pos0, squareC, stableList)) {
+              pos = pos0;
+              stableAddsquareList = stableList.slice();
+              squareToStable(pos, squareList[squareIndex], stableAddsquareList, squareColorIndex);
+            }
+          }
+        }
+      }
+      function arrowrightFun(e) {
+        if (state === "run") {
+          if (runState === "control") {
+            var pos0 = pos.slice();
+            var squareC = squareList[squareIndex];
+            pos0[0] + 1 + squareC.w <= row && pos0[0]++;
+            if (!checkFloor(pos0, squareC) && !checkOverlapStable(pos0, squareC, stableList)) {
+              pos = pos0;
+              stableAddsquareList = stableList.slice();
+              squareToStable(pos, squareList[squareIndex], stableAddsquareList, squareColorIndex);
+            }
+          }
+        }
+      }
+      function arrowdownFun(e) {
+        if (state === "run") {
+          if (runState === "control") {
+            var squareC = squareList[squareIndex];
+            var step = getToFloorStep(squareC);
+            if (step === 0) {
+              setSquareComplete(pos, squareC, stableList, squareColorIndex);
+            } else {
+              pos[1]++;
+            }
+            stableAddsquareList = stableList.slice();
+            squareToStable(pos, squareList[squareIndex], stableAddsquareList, squareColorIndex);
+          }
+        }
+      }
+      keyEvent01.addOnce("any", anyFun);
+
+      keyEvent01.addOnce("arrowup", arrowupFun);
+      keyEvent01.addKeydown("arrowleft", arrowleftFun);
+      keyEvent01.addKeydown("arrowright", arrowrightFun);
+      keyEvent01.addKeydown("arrowdown", arrowdownFun);
+    })();
+  </script>
+</html>
